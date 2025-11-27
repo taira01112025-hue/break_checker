@@ -13,8 +13,8 @@
             background-color: #f4f4f9;
         }
         .container {
-            /* 画面最適化のため、最大幅を400pxに調整 */
-            max-width: 400px; 
+            /* 画面表示の横幅を360pxに調整 */
+            max-width: 360px; 
             margin: 0 auto;
             padding: 20px;
             background-color: #fff;
@@ -278,7 +278,6 @@
 
             .break-controls {
                 flex-wrap: wrap; 
-                /* スマホではボタンを2列に並べるためにjustify-contentを調整 */
                 justify-content: space-around; 
             }
             .time-input {
@@ -291,10 +290,9 @@
             .skipped-button, 
             .reset-button {
                 flex-grow: 1;
-                /* 48%に設定し、gap (10px) の余白を考慮して2つ並べる */
                 width: 48%; 
-                min-width: 100px; /* 最小幅を確保 */
-                margin-bottom: 10px; /* 縦方向のスペース */
+                min-width: 100px;
+                margin-bottom: 10px;
             }
         }
     </style>
