@@ -24,8 +24,31 @@
         h1 {
             text-align: center;
             color: #333;
-            margin-bottom: 20px;
+            margin-bottom: 10px; /* マージンを調整 */
             font-size: 1.6em;
+        }
+
+        /* --- 休みの日ボタン --- */
+        #holiday-button {
+            display: block;
+            width: 100%;
+            padding: 15px;
+            margin-bottom: 20px;
+            font-size: 1.2em;
+            font-weight: bold;
+            color: white;
+            background-color: #ff9800; /* オレンジ系 */
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        #holiday-button.recorded {
+            background-color: #4CAF50; /* 記録済みは緑系 */
+        }
+        #holiday-button:disabled { 
+            background-color: #6c757d; 
+            cursor: not-allowed; 
         }
 
         /* --- 日付ナビゲーション --- */
@@ -204,6 +227,23 @@
             right: 4px;
             line-height: 1;
         }
+
+        /* 🌟 休みの日として記録された日のマーク (青色/星) 🌟 */
+        .calendar-day.holiday-record::after {
+            content: '★'; /* 記号を星に変更 */
+            color: #007bff; /* 青色に変更 */
+            font-size: 0.8em; /* サイズを少し大きく */
+            position: absolute;
+            bottom: 4px; 
+            right: 4px;
+            line-height: 1;
+        }
+
+        /* 休みの日として記録された日のセル全体も少し色を変える */
+        .calendar-day.holiday-record {
+             background-color: #f0f8ff; /* 薄い水色 */
+             border: 1px solid #007bff;
+        }
         
         /* --- その他の情報 --- */
         .note { 
@@ -225,6 +265,8 @@
 <body>
     <div class="container">
         <h1>休憩時間 実施記録</h1>
+
+        <button id="holiday-button">🗓️ 休みの日を記録する</button>
 
         <div class="date-navigator">
             <button id="prev-day">◀ 前日</button>
@@ -277,7 +319,8 @@
         </div>
 
         <p class="note">
-            🟢 **緑のマーク（●）**: 休憩が**3つ全部**記録されています。<br>
+            ⭐ **青い星（★）**: 「休みの日」として**一括記録**されています。<br>
+            🟢 **緑のマーク（●）**: 休憩が**3つ全部**記録されています。（通常の勤務日）<br>
             🔴 **赤のマーク（●）**: 休憩が**1つまたは2つ**記録されています。（未達成あり）<br>
             📝 **過去の日付**では、**時刻を入力してから**「記録」ボタンを押してください。<br>
             🗓️ 最後に選択した日付はブラウザに記憶されます。
@@ -286,16 +329,15 @@
     
     <script>
         const DATE_STORAGE_PREFIX = "break_record_"; 
-        const CURRENT_DATE_KEY = "current_date_selection"; // 【追加】選択日付保存キー
+        const CURRENT_DATE_KEY = "current_date_selection"; 
         const today = new Date();
         const breakIds = ['morning', 'lunch', 'afternoon'];
 
-        // 【変更】currentDateの初期化：ローカルストレージから復元を試みる
+        // currentDateの初期化：ローカルストレージから復元を試みる
         let initialDateStr = localStorage.getItem(CURRENT_DATE_KEY);
         let currentDate;
         if (initialDateStr) {
             currentDate = new Date(initialDateStr);
-            // 保存された日付が未来の場合、今日の日付に戻す
             if (currentDate.getTime() > new Date().setHours(23, 59, 59, 999)) {
                 currentDate = new Date(today);
             }
@@ -329,17 +371,38 @@
         }
 
         /**
-         * 特定の日の休憩記録の数を返す (0, 1, 2, or 3)
+         * 特定の日の休憩記録の数を返し、休日フラグを判定する
+         * @returns {object} {count: number, isHoliday: boolean}
          */
-        function getRecordCount(dateKey) {
+        function getRecordStatus(dateKey) {
             let count = 0;
+            let allBreaksAre0000 = true;
+            
             breakIds.forEach(id => {
                 const storageKey = DATE_STORAGE_PREFIX + dateKey + '_' + id;
-                if (localStorage.getItem(storageKey) !== null) {
+                const savedData = localStorage.getItem(storageKey);
+                
+                if (savedData !== null) {
                     count++;
+                    try {
+                        const data = JSON.parse(savedData);
+                        if (data.time !== '00:00') {
+                            allBreaksAre0000 = false;
+                        }
+                    } catch (e) {
+                         // データ解析エラーが発生した場合、それは手動記録か古いデータであり、休日ではないと判断
+                         allBreaksAre0000 = false; 
+                    }
+                } else {
+                    // 1つでも記録がない場合は、完全な記録ではないため、休日でもない
+                    allBreaksAre0000 = false;
                 }
             });
-            return count;
+            
+            // 記録数が3つ、かつ、全ての開始時刻が '00:00' の場合に休日と判定
+            const isHoliday = (count === 3 && allBreaksAre0000);
+
+            return { count, isHoliday };
         }
 
         // --- 記録/表示の更新関数 ---
@@ -354,7 +417,7 @@
 
             const storageKey = DATE_STORAGE_PREFIX + dateKey + '_' + breakId;
             
-            // 【変更】現在の選択日付を保存する
+            // 現在の選択日付を保存する
             localStorage.setItem(CURRENT_DATE_KEY, dateKey);
             
             // 状態リセット
@@ -366,18 +429,31 @@
 
             if (startTimeStr) {
                 // 記録がある場合
-                const [h, m] = startTimeStr.split(':').map(Number);
-                const startTimeForCalc = new Date();
-                startTimeForCalc.setHours(h, m, 0, 0); 
                 
-                const endTimeStr = calculateEndTime(startTimeForCalc, durationMinutes);
-                
-                timeDisplayEl.innerHTML = `
-                    開始時刻: <strong>${startTimeStr}</strong>
-                    <br>
-                    終了時刻（+${durationMinutes}分）: <strong>${endTimeStr}</strong>
-                `;
-                breakItemEl.classList.add('recorded');
+                let timeDisplayContent;
+                if (startTimeStr === '00:00') {
+                    // 休みの日として記録された場合
+                    timeDisplayContent = `<strong>休みの日として記録済み</strong>`;
+                    breakItemEl.classList.add('recorded');
+                    breakItemEl.classList.add('holiday-break');
+                } else {
+                    // 通常の時刻記録がある場合
+                    const [h, m] = startTimeStr.split(':').map(Number);
+                    const startTimeForCalc = new Date();
+                    startTimeForCalc.setHours(h, m, 0, 0); 
+                    
+                    const endTimeStr = calculateEndTime(startTimeForCalc, durationMinutes);
+                    
+                    timeDisplayContent = `
+                        開始時刻: <strong>${startTimeStr}</strong>
+                        <br>
+                        終了時刻（+${durationMinutes}分）: <strong>${endTimeStr}</strong>
+                    `;
+                    breakItemEl.classList.add('recorded');
+                    breakItemEl.classList.remove('holiday-break');
+                }
+
+                timeDisplayEl.innerHTML = timeDisplayContent;
                 recordButtonEl.textContent = '記録済み';
 
                 localStorage.setItem(storageKey, JSON.stringify({
@@ -389,6 +465,7 @@
             } else {
                 // 記録がない場合
                 timeDisplayEl.textContent = '未記録';
+                breakItemEl.classList.remove('holiday-break');
                 localStorage.removeItem(storageKey);
                 timeInputEl.value = ''; // 入力欄をクリア
             }
@@ -427,7 +504,38 @@
             }
             
             drawCalendar(currentDate); 
+            // 【更新】休みの日ボタンの状態更新
+            updateHolidayButton();
         }
+        
+        /**
+         * 休みの日ボタンの状態（テキスト、色）を更新する
+         */
+        function updateHolidayButton() {
+            const holidayButtonEl = document.getElementById('holiday-button');
+            const dateKey = formatDateKey(currentDate);
+            const { count: recordCount, isHoliday } = getRecordStatus(dateKey); // 新しい関数を使用
+            const isFuture = currentDate.getTime() > new Date().setHours(23, 59, 59, 999);
+
+            holidayButtonEl.classList.remove('recorded');
+            holidayButtonEl.disabled = false;
+            
+            if (isFuture) {
+                holidayButtonEl.textContent = '未来の日付は記録できません';
+                holidayButtonEl.disabled = true;
+            } else if (isHoliday) { 
+                // 既に休日として記録済みの場合はリセット表示
+                holidayButtonEl.textContent = '✅ 休みの日をリセット';
+                holidayButtonEl.classList.add('recorded');
+            } else if (recordCount > 0) {
+                // 部分記録または通常の完全記録の場合は上書きを促す表示
+                holidayButtonEl.textContent = `⚠️ 記録を上書きして休みにする (現在${recordCount}件)`;
+            } else {
+                // 未記録の場合は記録表示
+                holidayButtonEl.textContent = '🗓️ 休みの日を記録する';
+            }
+        }
+
 
         function loadBreaks() {
             const dateKey = formatDateKey(currentDate);
@@ -463,6 +571,8 @@
             });
             
             drawCalendar(currentDate); 
+            // 【更新】読み込み完了後、休みの日ボタンの状態を更新
+            updateHolidayButton();
         }
         
         // --- カレンダー描画の主要ロジック ---
@@ -505,8 +615,8 @@
                 cell.textContent = d;
                 cell.setAttribute('data-date', cellDateKey);
                 
-                // 記録の数を取得し、クラスを適用
-                const recordCount = getRecordCount(cellDateKey); 
+                // 記録のステータスを取得
+                const { count: recordCount, isHoliday } = getRecordStatus(cellDateKey); 
 
                 if (cellDateKey === formatDateKey(today)) { 
                     cell.classList.add('today'); 
@@ -515,8 +625,11 @@
                     cell.classList.add('selected'); 
                 }
                 
-                if (recordCount === 3) {
-                    // 3つ全部記録されている場合
+                // 休日判定を最優先
+                if (isHoliday) {
+                    cell.classList.add('holiday-record');
+                } else if (recordCount === 3) {
+                    // 3つ全部記録されているが休日ではない場合 (通常の完全記録)
                     cell.classList.add('full-record');
                 } else if (recordCount > 0) {
                     // 1つまたは2つ記録されている場合
@@ -539,7 +652,7 @@
             loadBreaks(); 
         }
         
-        // --- イベントリスナーの設定 (リセット長押しロジック) ---
+        // --- イベントリスナーの設定 ---
         
         document.addEventListener('DOMContentLoaded', () => {
             loadBreaks(); 
@@ -547,6 +660,42 @@
             // 日付ナビゲーション
             document.getElementById('prev-day').addEventListener('click', () => changeDate(-1));
             document.getElementById('next-day').addEventListener('click', () => changeDate(1));
+
+            // 休みの日ボタンの処理
+            document.getElementById('holiday-button').addEventListener('click', () => {
+                const dateKey = formatDateKey(currentDate);
+                const { count: recordCount, isHoliday } = getRecordStatus(dateKey);
+                
+                if (isHoliday) {
+                    // 記録済みの場合はリセット処理
+                    if (confirm(`${dateKey} の休みの日記録を全て削除しますか？`)) {
+                        breakIds.forEach(id => {
+                            const breakItemEl = document.getElementById(id);
+                            const recordButtonEl = breakItemEl.querySelector('.record-button');
+                            const defaultDuration = Number(recordButtonEl.getAttribute('data-duration'));
+                            updateDisplayAndSave(id, defaultDuration, null); // nullでリセット
+                        });
+                        alert(`${dateKey} の記録をリセットしました。`);
+                    }
+                } else {
+                    // 未記録または部分記録の場合は一括記録処理
+                    if (recordCount > 0) {
+                        if (!confirm(`${dateKey} には既に記録があります。全て上書きして「休みの日」として記録しますか？`)) {
+                            return; // キャンセルされたら終了
+                        }
+                    }
+                    
+                    // 「休みの日」として記録するためにダミーの開始時刻 '00:00' を使用
+                    breakIds.forEach(id => {
+                        const breakItemEl = document.getElementById(id);
+                        const recordButtonEl = breakItemEl.querySelector('.record-button');
+                        const defaultDuration = Number(recordButtonEl.getAttribute('data-duration'));
+                        // 休みの日なので、開始時刻はダミーで '00:00' を記録
+                        updateDisplayAndSave(id, defaultDuration, '00:00'); 
+                    });
+                    alert(`${dateKey} を休みの日として記録しました。`);
+                }
+            });
 
             // 記録ボタン
             document.querySelectorAll('.record-button').forEach(button => {
@@ -562,6 +711,25 @@
                     const isToday = formatDateKey(currentDate) === formatDateKey(new Date());
                     
                     let startTimeStr = timeInputEl.value;
+                    
+                    // 休日記録（00:00）を上書きしようとしているかチェック
+                    const storageKey = DATE_STORAGE_PREFIX + formatDateKey(currentDate) + '_' + breakId;
+                    const savedData = localStorage.getItem(storageKey);
+                    let isHolidayBreak = false;
+                    if (savedData) {
+                        try {
+                           const data = JSON.parse(savedData);
+                           if (data.time === '00:00') {
+                                isHolidayBreak = true;
+                           }
+                        } catch(e) {}
+                    }
+                    
+                    if (isHolidayBreak) {
+                         if (!confirm('この休憩は「休みの日」として記録されています。上書きして通常の記録に変更しますか？')) {
+                             return;
+                         }
+                    }
 
                     // 1. 過去の日付で時間が未入力の場合、入力を促す 
                     if (!isToday && !startTimeStr) {
@@ -570,7 +738,7 @@
                         return;
                     }
                     
-                    // 【修正】2. 今日の日付で時間が未入力の場合のみ、現在時刻を自動設定 (入力済みならその値を優先)
+                    // 2. 今日の日付で時間が未入力の場合のみ、現在時刻を自動設定 (入力済みならその値を優先)
                     if (isToday && !startTimeStr) {
                         startTimeStr = formatTime(new Date());
                     }
