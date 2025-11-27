@@ -126,7 +126,7 @@
         
         /* 記録ボタン */
         .record-button {
-            padding: 12px 18px; 
+            padding: 12px 10px; /* パディング調整 */
             background-color: #28a745;
             color: white;
             border: none;
@@ -135,10 +135,25 @@
             font-size: 1em;
             flex-grow: 1; 
         }
-        .record-button:disabled { background-color: #6c757d; cursor: not-allowed; } 
+
+        /* 未実施ボタンのスタイル */
+        .skipped-button {
+            padding: 12px 10px; /* パディング調整 */
+            background-color: #6c757d; /* グレー系 */
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1em;
+            flex-grow: 1; 
+        }
+        .record-button:disabled, .skipped-button:disabled { 
+            background-color: #6c757d; 
+            cursor: not-allowed; 
+        } 
 
         .reset-button {
-            padding: 12px 18px;
+            padding: 12px 10px;
             background-color: #dc3545;
             color: white;
             border: none;
@@ -155,6 +170,16 @@
         #lunch .record-button { background-color: #007bff; }
         .break-item.recorded { background-color: #e6ffe6; border-color: #4CAF50; }
         #lunch.recorded { background-color: #e6f7ff; border-color: #007bff; }
+
+        /* 未実施として記録されたアイテムのスタイル */
+        .break-item.skipped {
+            background-color: #fff3cd; /* 薄い黄色 */
+            border-color: #ffc107;
+        }
+        .break-item.skipped .time-display strong {
+            color: #d89b02;
+        }
+
         .reset-button.pressing {
             background-color: #ffc107; 
             color: #333;
@@ -244,6 +269,23 @@
              background-color: #f0f8ff; /* 薄い水色 */
              border: 1px solid #007bff;
         }
+
+        /* ⚠️ 未実施が1つ以上ある日のマーク (灰色/三角) ⚠️ */
+        .calendar-day.skipped-day::after {
+            content: '▲'; /* 三角に変更 */
+            color: #6c757d; /* 灰色に変更 */
+            font-size: 0.8em; 
+            position: absolute;
+            bottom: 4px; 
+            right: 4px;
+            line-height: 1;
+        }
+
+        /* 未実施がある日のセル全体も少し色を変える */
+        .calendar-day.skipped-day {
+             background-color: #f8f9fa; /* 薄いグレー */
+             border: 1px solid #6c757d;
+        }
         
         /* --- その他の情報 --- */
         .note { 
@@ -258,6 +300,18 @@
             .container {
                 padding: 15px;
                 width: 100%;
+            }
+            .break-controls {
+                flex-wrap: wrap; /* ボタンが多いため折り返しを許可 */
+            }
+            .time-input {
+                width: 100%;
+                margin-bottom: 10px;
+                box-sizing: border-box;
+            }
+            .record-button, .skipped-button {
+                flex-grow: 1;
+                width: auto;
             }
         }
     </style>
@@ -283,6 +337,7 @@
                 <div class="break-controls">
                     <input type="time" class="time-input" data-break-id="morning" style="display: none;">
                     <button class="record-button" data-break-id="morning" data-duration="15">休憩開始</button>
+                    <button class="skipped-button" data-break-id="morning">未実施</button> 
                     <button class="reset-button" data-break-id="morning" style="display: none;">リセット</button>
                 </div>
             </div>
@@ -295,6 +350,7 @@
                 <div class="break-controls">
                     <input type="time" class="time-input" data-break-id="lunch" style="display: none;">
                     <button class="record-button" data-break-id="lunch" data-duration="60">休憩開始</button>
+                    <button class="skipped-button" data-break-id="lunch">未実施</button> 
                     <button class="reset-button" data-break-id="lunch" style="display: none;">リセット</button>
                 </div>
             </div>
@@ -307,6 +363,7 @@
                 <div class="break-controls">
                     <input type="time" class="time-input" data-break-id="afternoon" style="display: none;">
                     <button class="record-button" data-break-id="afternoon" data-duration="15">休憩開始</button>
+                    <button class="skipped-button" data-break-id="afternoon">未実施</button> 
                     <button class="reset-button" data-break-id="afternoon" style="display: none;">リセット</button>
                 </div>
             </div>
@@ -320,6 +377,7 @@
 
         <p class="note">
             ⭐ **青い星（★）**: 「休みの日」として**一括記録**されています。<br>
+            ⚠️ **灰色の三角（▲）**: 休憩のうち**少なくとも1つ**が「未実施」として記録されています。<br>
             🟢 **緑のマーク（●）**: 休憩が**3つ全部**記録されています。（通常の勤務日）<br>
             🔴 **赤のマーク（●）**: 休憩が**1つまたは2つ**記録されています。（未達成あり）<br>
             📝 **過去の日付**では、**時刻を入力してから**「記録」ボタンを押してください。<br>
@@ -330,6 +388,9 @@
     <script>
         const DATE_STORAGE_PREFIX = "break_record_"; 
         const CURRENT_DATE_KEY = "current_date_selection"; 
+        // 未実施を記録するためのダミー時刻
+        const SKIPPED_TIME = '99:99'; 
+        const HOLIDAY_TIME = '00:00'; // 休みの日を記録するためのダミー時刻
         const today = new Date();
         const breakIds = ['morning', 'lunch', 'afternoon'];
 
@@ -371,38 +432,52 @@
         }
 
         /**
-         * 特定の日の休憩記録の数を返し、休日フラグを判定する
-         * @returns {object} {count: number, isHoliday: boolean}
+         * 特定の日の休憩記録の数を返し、休日フラグと未実施フラグを判定する
+         * @returns {object} {count: number, isHoliday: boolean, hasSkipped: boolean}
          */
         function getRecordStatus(dateKey) {
-            let count = 0;
-            let allBreaksAre0000 = true;
+            let count = 0; // 99:99と00:00 以外の有効な記録数
+            let totalRecords = 0; // すべての記録の数 (00:00, 99:99含む)
+            let allBreaksAreHoliday = true; // 3つ全てが00:00であるためのフラグ
+            let hasSkipped = false; // 99:99の記録があるかどうかのフラグ
             
             breakIds.forEach(id => {
                 const storageKey = DATE_STORAGE_PREFIX + dateKey + '_' + id;
                 const savedData = localStorage.getItem(storageKey);
                 
                 if (savedData !== null) {
-                    count++;
+                    totalRecords++;
+
                     try {
                         const data = JSON.parse(savedData);
-                        if (data.time !== '00:00') {
-                            allBreaksAre0000 = false;
+                        
+                        // 99:99 (未実施) の場合はフラグを立てる
+                        if (data.time === SKIPPED_TIME) {
+                            hasSkipped = true; 
                         }
+                        
+                        // 99:99 (未実施) または 00:00 (休日) 以外の有効な記録をカウント
+                        if (data.time !== SKIPPED_TIME && data.time !== HOLIDAY_TIME) {
+                            count++;
+                        }
+
+                        // 00:00 (休日) 以外の場合は休日フラグをオフにする
+                        if (data.time !== HOLIDAY_TIME) {
+                            allBreaksAreHoliday = false;
+                        }
+
                     } catch (e) {
-                         // データ解析エラーが発生した場合、それは手動記録か古いデータであり、休日ではないと判断
-                         allBreaksAre0000 = false; 
+                         allBreaksAreHoliday = false; 
                     }
                 } else {
-                    // 1つでも記録がない場合は、完全な記録ではないため、休日でもない
-                    allBreaksAre0000 = false;
+                    allBreaksAreHoliday = false;
                 }
             });
-            
-            // 記録数が3つ、かつ、全ての開始時刻が '00:00' の場合に休日と判定
-            const isHoliday = (count === 3 && allBreaksAre0000);
 
-            return { count, isHoliday };
+            // totalRecordsが3つ、かつ、全ての開始時刻が '00:00' の場合に休日と判定
+            const isHoliday = (totalRecords === 3 && allBreaksAreHoliday);
+
+            return { count, isHoliday, hasSkipped }; // 新しいフラグを返す
         }
 
         // --- 記録/表示の更新関数 ---
@@ -412,6 +487,7 @@
             const timeDisplayEl = document.getElementById(`time-${breakId}`);
             const breakItemEl = document.getElementById(breakId);
             const recordButtonEl = breakItemEl.querySelector('.record-button');
+            const skippedButtonEl = breakItemEl.querySelector('.skipped-button'); 
             const resetButtonEl = breakItemEl.querySelector('.reset-button');
             const timeInputEl = breakItemEl.querySelector('.time-input'); 
 
@@ -421,9 +497,10 @@
             localStorage.setItem(CURRENT_DATE_KEY, dateKey);
             
             // 状態リセット
-            breakItemEl.classList.remove('recorded');
+            breakItemEl.classList.remove('recorded', 'holiday-break', 'skipped');
             recordButtonEl.textContent = '休憩開始';
             recordButtonEl.disabled = false;
+            skippedButtonEl.disabled = false;
             resetButtonEl.style.display = 'none';
             resetButtonEl.textContent = 'リセット'; 
 
@@ -431,11 +508,16 @@
                 // 記録がある場合
                 
                 let timeDisplayContent;
-                if (startTimeStr === '00:00') {
-                    // 休みの日として記録された場合
+                if (startTimeStr === HOLIDAY_TIME) {
+                    // 休みの日として記録された場合 (00:00)
                     timeDisplayContent = `<strong>休みの日として記録済み</strong>`;
-                    breakItemEl.classList.add('recorded');
-                    breakItemEl.classList.add('holiday-break');
+                    breakItemEl.classList.add('recorded', 'holiday-break');
+                    breakItemEl.classList.remove('skipped');
+                } else if (startTimeStr === SKIPPED_TIME) {
+                     // 未実施として記録された場合 (99:99)
+                    timeDisplayContent = `<strong>未実施として記録されました</strong>`;
+                    breakItemEl.classList.add('recorded', 'skipped');
+                    breakItemEl.classList.remove('holiday-break');
                 } else {
                     // 通常の時刻記録がある場合
                     const [h, m] = startTimeStr.split(':').map(Number);
@@ -450,7 +532,7 @@
                         終了時刻（+${durationMinutes}分）: <strong>${endTimeStr}</strong>
                     `;
                     breakItemEl.classList.add('recorded');
-                    breakItemEl.classList.remove('holiday-break');
+                    breakItemEl.classList.remove('holiday-break', 'skipped');
                 }
 
                 timeDisplayEl.innerHTML = timeDisplayContent;
@@ -461,11 +543,16 @@
                     duration: durationMinutes
                 }));
                 
-                timeInputEl.value = startTimeStr; // 入力欄にも記録時間を表示
+                // 特殊な時刻（99:99, 00:00）の場合は時刻入力欄をクリア。それ以外は記録時間を表示
+                if (startTimeStr !== SKIPPED_TIME && startTimeStr !== HOLIDAY_TIME) {
+                    timeInputEl.value = startTimeStr; 
+                } else {
+                    timeInputEl.value = '';
+                }
+                
             } else {
                 // 記録がない場合
                 timeDisplayEl.textContent = '未記録';
-                breakItemEl.classList.remove('holiday-break');
                 localStorage.removeItem(storageKey);
                 timeInputEl.value = ''; // 入力欄をクリア
             }
@@ -477,6 +564,7 @@
             if (isFuture) {
                  // 未来の日付の場合、全て無効化
                  recordButtonEl.disabled = true;
+                 skippedButtonEl.disabled = true;
                  resetButtonEl.style.display = 'none';
                  timeInputEl.style.display = 'none'; 
                  if (!startTimeStr) {
@@ -487,12 +575,14 @@
                  timeInputEl.style.display = 'inline-block'; 
                  
                  if (startTimeStr) {
-                    // 記録済みの場合は記録ボタンを無効化し、リセットを有効化
+                    // 記録済みの場合は記録ボタンと未実施ボタンを無効化し、リセットを有効化
                     recordButtonEl.disabled = true;
+                    skippedButtonEl.disabled = true;
                     resetButtonEl.style.display = 'inline-block';
                  } else {
-                    // 未記録の場合は記録ボタンを有効化し、リセットを無効化
+                    // 未記録の場合は全て有効化
                     recordButtonEl.disabled = false;
+                    skippedButtonEl.disabled = false;
                     resetButtonEl.style.display = 'none';
                     recordButtonEl.textContent = '記録'; 
                  }
@@ -504,7 +594,6 @@
             }
             
             drawCalendar(currentDate); 
-            // 【更新】休みの日ボタンの状態更新
             updateHolidayButton();
         }
         
@@ -514,7 +603,8 @@
         function updateHolidayButton() {
             const holidayButtonEl = document.getElementById('holiday-button');
             const dateKey = formatDateKey(currentDate);
-            const { count: recordCount, isHoliday } = getRecordStatus(dateKey); // 新しい関数を使用
+            // hasSkippedは、休みの日ボタンのロジックでは無視して問題ない
+            const { count: recordCount, isHoliday } = getRecordStatus(dateKey); 
             const isFuture = currentDate.getTime() > new Date().setHours(23, 59, 59, 999);
 
             holidayButtonEl.classList.remove('recorded');
@@ -527,12 +617,23 @@
                 // 既に休日として記録済みの場合はリセット表示
                 holidayButtonEl.textContent = '✅ 休みの日をリセット';
                 holidayButtonEl.classList.add('recorded');
-            } else if (recordCount > 0) {
-                // 部分記録または通常の完全記録の場合は上書きを促す表示
-                holidayButtonEl.textContent = `⚠️ 記録を上書きして休みにする (現在${recordCount}件)`;
             } else {
-                // 未記録の場合は記録表示
-                holidayButtonEl.textContent = '🗓️ 休みの日を記録する';
+                // 総レコード数を計算（未実施や通常の記録を含む）
+                let totalRecords = 0;
+                 breakIds.forEach(id => {
+                    const storageKey = DATE_STORAGE_PREFIX + dateKey + '_' + id;
+                    if (localStorage.getItem(storageKey) !== null) {
+                        totalRecords++;
+                    }
+                });
+                
+                if (totalRecords > 0) {
+                     // 部分記録または完全記録（未実施記録含む）の場合は上書きを促す表示
+                    holidayButtonEl.textContent = `⚠️ 記録を上書きして休みにする (現在${totalRecords}件の記録あり)`;
+                } else {
+                    // 未記録の場合は記録表示
+                    holidayButtonEl.textContent = '🗓️ 休みの日を記録する';
+                }
             }
         }
 
@@ -571,7 +672,6 @@
             });
             
             drawCalendar(currentDate); 
-            // 【更新】読み込み完了後、休みの日ボタンの状態を更新
             updateHolidayButton();
         }
         
@@ -616,7 +716,7 @@
                 cell.setAttribute('data-date', cellDateKey);
                 
                 // 記録のステータスを取得
-                const { count: recordCount, isHoliday } = getRecordStatus(cellDateKey); 
+                const { count: recordCount, isHoliday, hasSkipped } = getRecordStatus(cellDateKey); 
 
                 if (cellDateKey === formatDateKey(today)) { 
                     cell.classList.add('today'); 
@@ -625,11 +725,14 @@
                     cell.classList.add('selected'); 
                 }
                 
-                // 休日判定を最優先
+                // 判定優先度: 休日(★) > 未実施あり(▲) > 完全記録(🟢) > 部分記録(🔴)
+
                 if (isHoliday) {
                     cell.classList.add('holiday-record');
+                } else if (hasSkipped) { // 未実施の記録がある場合
+                    cell.classList.add('skipped-day');
                 } else if (recordCount === 3) {
-                    // 3つ全部記録されているが休日ではない場合 (通常の完全記録)
+                    // 3つ全部記録されているが休日でも未実施もない場合 (通常の完全記録)
                     cell.classList.add('full-record');
                 } else if (recordCount > 0) {
                     // 1つまたは2つ記録されている場合
@@ -664,7 +767,15 @@
             // 休みの日ボタンの処理
             document.getElementById('holiday-button').addEventListener('click', () => {
                 const dateKey = formatDateKey(currentDate);
-                const { count: recordCount, isHoliday } = getRecordStatus(dateKey);
+                const { isHoliday } = getRecordStatus(dateKey);
+                
+                let totalRecords = 0;
+                breakIds.forEach(id => {
+                    const storageKey = DATE_STORAGE_PREFIX + dateKey + '_' + id;
+                    if (localStorage.getItem(storageKey) !== null) {
+                        totalRecords++;
+                    }
+                });
                 
                 if (isHoliday) {
                     // 記録済みの場合はリセット処理
@@ -679,25 +790,25 @@
                     }
                 } else {
                     // 未記録または部分記録の場合は一括記録処理
-                    if (recordCount > 0) {
+                    if (totalRecords > 0) {
                         if (!confirm(`${dateKey} には既に記録があります。全て上書きして「休みの日」として記録しますか？`)) {
                             return; // キャンセルされたら終了
                         }
                     }
                     
-                    // 「休みの日」として記録するためにダミーの開始時刻 '00:00' を使用
+                    // 「休みの日」として記録するためにダミーの開始時刻 HOLIDAY_TIME を使用
                     breakIds.forEach(id => {
                         const breakItemEl = document.getElementById(id);
                         const recordButtonEl = breakItemEl.querySelector('.record-button');
                         const defaultDuration = Number(recordButtonEl.getAttribute('data-duration'));
-                        // 休みの日なので、開始時刻はダミーで '00:00' を記録
-                        updateDisplayAndSave(id, defaultDuration, '00:00'); 
+                        // 休みの日なので、開始時刻はダミーで HOLIDAY_TIME を記録
+                        updateDisplayAndSave(id, defaultDuration, HOLIDAY_TIME); 
                     });
                     alert(`${dateKey} を休みの日として記録しました。`);
                 }
             });
 
-            // 記録ボタン
+            // 記録ボタン (休憩開始)
             document.querySelectorAll('.record-button').forEach(button => {
                 button.addEventListener('click', (event) => {
                     const isFuture = currentDate.getTime() > new Date().setHours(23, 59, 59, 999);
@@ -712,24 +823,25 @@
                     
                     let startTimeStr = timeInputEl.value;
                     
-                    // 休日記録（00:00）を上書きしようとしているかチェック
+                    // 休日記録（00:00）または未実施記録（99:99）を上書きしようとしているかチェック
                     const storageKey = DATE_STORAGE_PREFIX + formatDateKey(currentDate) + '_' + breakId;
                     const savedData = localStorage.getItem(storageKey);
-                    let isHolidayBreak = false;
+                    let isSpecialRecord = false;
                     if (savedData) {
                         try {
                            const data = JSON.parse(savedData);
-                           if (data.time === '00:00') {
-                                isHolidayBreak = true;
+                           if (data.time === HOLIDAY_TIME || data.time === SKIPPED_TIME) {
+                                isSpecialRecord = true;
                            }
                         } catch(e) {}
                     }
                     
-                    if (isHolidayBreak) {
-                         if (!confirm('この休憩は「休みの日」として記録されています。上書きして通常の記録に変更しますか？')) {
+                    if (isSpecialRecord) {
+                         if (!confirm('この休憩は「休みの日」または「未実施」として記録されています。上書きして通常の記録に変更しますか？')) {
                              return;
                          }
                     }
+
 
                     // 1. 過去の日付で時間が未入力の場合、入力を促す 
                     if (!isToday && !startTimeStr) {
@@ -748,6 +860,24 @@
                 });
             });
             
+            // 未実施ボタンの処理
+            document.querySelectorAll('.skipped-button').forEach(button => {
+                button.addEventListener('click', (event) => {
+                    const isFuture = currentDate.getTime() > new Date().setHours(23, 59, 59, 999);
+                    if (isFuture) return; 
+                    
+                    const breakId = event.target.getAttribute('data-break-id');
+                    const recordButtonEl = document.querySelector(`.record-button[data-break-id="${breakId}"]`);
+                    const durationMinutes = Number(recordButtonEl.getAttribute('data-duration'));
+
+                    if (confirm(`【${breakId}】の休憩を「未実施」として記録しますか？\n（カレンダーには「未実施あり」の印がつきますが、通常の達成数にはカウントされません）`)) {
+                        // 未実施として記録するためにダミーの時刻 SKIPPED_TIME を使用
+                        updateDisplayAndSave(breakId, durationMinutes, SKIPPED_TIME); 
+                    }
+                });
+            });
+
+
             // リセットボタン (長押し対応)
             const resetButtons = document.querySelectorAll('.reset-button');
             const LONG_PRESS_DURATION = 1000; 
